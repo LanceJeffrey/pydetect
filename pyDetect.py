@@ -2,8 +2,6 @@
 from imutils.video import VideoStream
 from PIL import Image
 from PIL import ImageDraw
-from playsound import playsound
-from skimage.metrics import structural_similarity
 import upload
 import argparse
 import imutils
@@ -28,7 +26,7 @@ EDGETPU_SHARED_LIB = {
 
 class VideoCapture:
 	def __init__(self, name):
-		print("[INFO] starting VideoCapture")
+		logging.info("starting VideoCapture")
 		self.cap = VideoStream(name).start()
 		self.lock = threading.Lock()
 		self.q = queue.Queue()
@@ -58,7 +56,16 @@ class VideoCapture:
 	def stop(self):
 		self.cap.stop()
 
-
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+		
 def main():
 	# construct the argument parser and parse the arguments
 	parser = argparse.ArgumentParser(
@@ -69,29 +76,30 @@ def main():
 					  help='File path of image to process.')
 	parser.add_argument('-l', '--labels',
 					  help='File path of labels file.')
-	parser.add_argument('-t', '--threshold', type=float, default=0.4,
+	parser.add_argument('-t', '--threshold',
+					  type=float, default=0.4,
 					  help='Score threshold for detected objects.')
 	parser.add_argument('-c', '--mask',
 					  help='Mask to remove detections from areas')
+	parser.add_argument('-s', '--slack',
+					  help='Slack notification URL')
+	parser.add_argument('-w', '--headless',
+					  type=str2bool, default=False,
+					  help='Run headless mode')
 		
 	args = parser.parse_args()
-	
-	logging.basicConfig(format='%(asctime)s %(module)s.%(funcName)s:%(levelname)s:%(message)s',
-					datefmt='%m/%d/%Y %I_%M_%S %p',
-					filename="info.log",
-					level=logging.INFO)
-					
+
 	# initialize the labels dictionary
-	print("[INFO] parsing class labels...")
+	logging.info("parsing class labels...")
 	labels = load_labels(args.labels) if args.labels else {}
 		
 	# load the Google Coral object detection model
-	print("[INFO] loading Coral model...")
+	logging.info("loading Coral model...")
 	interpreter = make_interpreter(args.model)
 	interpreter.allocate_tensors()
 	
 	# initialize the video stream and allow the camera sensor to warmup
-	print("[INFO] starting video stream...")
+	logging.info("starting video stream...")
 	cap = VideoCapture(args.input)
 	
 	mask = cv2.imread(args.mask,0)
@@ -100,10 +108,8 @@ def main():
 	lastDetection = dict()
 	
 	time.sleep(1/2)
-	lastFrame,times = cap.read()
-	lastFrame = imutils.resize(lastFrame, width=500)
 	
-	print("[INFO] starting detection loop...")
+	logging.info("starting detection loop...")
 	# loop over the frames from the video stream
 	while True:
 		
@@ -117,35 +123,33 @@ def main():
 		# Mask areas that we dont want objects to be detected in
 		frame = cv2.bitwise_and(frame, frame, mask = mask)
 						
-		results = processFrame(frame, lastFrame, mask, interpreter, args.threshold)
+		results = processFrame(frame, mask, interpreter, args.threshold)
 				
-		processResults(image, results, labels, lastDetection, frametime)
-		
-		lastFrame = frame.copy()
-		
-		# show the output frame and wait for a key press
-		cv2.imshow("Frame", np.asarray(image))
-		key = cv2.waitKey(10) & 0xFF
-		# if the `q` key was pressed, break from the loop
-		if key == ord("q"):
-			break
-		
+		processResults(image, results, labels, lastDetection, frametime, args.slack)
+
+		if args.headless == False:
+			# show the output frame and wait for a key press
+			cv2.imshow("Frame", np.asarray(image))
+			key = cv2.waitKey(10) & 0xFF
+			# if the `q` key was pressed, break from the loop
+			if key == ord("q"):
+				break
+
 		#if len(results) == 0:
 		time.sleep(1)
-			
-		
+
 	# do a bit of cleanup
 	cap.stop()
 	cv2.destroyAllWindows()
 	
-def processResults(image, results, labels, lastDetection, frametime):
+def processResults(image, results, labels, lastDetection, frametime, slackURL):
 	
 	# loop over the results
 	for obj in results:
 		if obj.id <= 8:
-			print('       ' + labels.get(obj.id, obj.id))
-			print('         score:  ', obj.score)
-			print('         bbox:   ', obj.bbox)
+			logging.info(labels.get(obj.id, obj.id))
+			logging.info(' score: %s', obj.score)
+			logging.info(' bbox:  %s', obj.bbox)
 			
 			bbox = obj.bbox
 
@@ -159,37 +163,36 @@ def processResults(image, results, labels, lastDetection, frametime):
 	for obj in results:
 		if obj.id <= 1:	
 			if obj.id in lastDetection:
-				if lastDetection[obj.id] + 3 <= frametime:
-					foundNewDetection(labels.get(obj.id, obj.id), image)
+				if lastDetection[obj.id] + 15 <= frametime:
+					foundNewDetection(labels.get(obj.id, obj.id), image, slackURL)
 			lastDetection[obj.id] = frametime
 	
 
-def foundNewDetection(label, image):
-	print ('         +++++++++++++++++++  NEW DETECTION  +++++++++++++++++++  ')
+def foundNewDetection(label, image, slackURL):
+	logging.info ('NEW DETECTION ')
+	send_message_to_slack("Detected new " + label, slackURL)
 	image.save("latest.png")
 	upload.upload("./client_id.json", ["latest.png"], "pyDetect")
-	send_message_to_slack("Detected new " + label)
-	playsound('inputs/chord.wav')
 
-def send_message_to_slack(text):
+def send_message_to_slack(text, slackURL):
  
     post = {"text": "{0}".format(text)}
  
     try:
         json_data = json.dumps(post)
-        req = request.Request("https://hooks.slack.com/services/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",
+        req = request.Request(slackURL,
                               data=json_data.encode('ascii'),
                               headers={'Content-Type': 'application/json'}) 
         resp = request.urlopen(req)
     except Exception as em:
-        print("EXCEPTION: " + str(em))
+        logging.info("EXCEPTION: " + str(em))
 
-def processFrame(frame, lastFrame, mask, interpreter, threshold):
+def processFrame(frame, mask, interpreter, threshold):
 
 	start = time.time()
 	
-	print("[INFO] =============================")
-	print("[INFO] Processing Frame")
+	logging.info("=============================")
+	logging.info("Processing Frame")
 	
 	results = []
 				
@@ -206,7 +209,7 @@ def processFrame(frame, lastFrame, mask, interpreter, threshold):
 	results = detect.get_output(interpreter, threshold, scale)
 	
 	end = time.time()
-	print('[INFO] Proccessing Time: %.3f s' % (end - start))
+	logging.info('Proccessing Time: %.3f s' % (end - start))
 
 	return results
 
@@ -241,7 +244,12 @@ def make_interpreter(model_file):
       ])
 
 if __name__ == '__main__':
-	print("[INFO] starting")
+
+	logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
+					datefmt='%Y-%m-%d %H:%M:%S',
+					filename="info.log",
+					level=logging.INFO)
+	logging.info("starting")
 	main()
 
 
