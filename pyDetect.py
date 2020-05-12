@@ -2,6 +2,7 @@
 from imutils.video import VideoStream
 from PIL import Image
 from PIL import ImageDraw
+from logging.handlers import RotatingFileHandler
 import upload
 import argparse
 import imutils
@@ -117,6 +118,7 @@ def main():
 		# to have a maximum width of 500 pixels
 		frame,frametime = cap.read()
 		frame = imutils.resize(frame, width=500)
+		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 				
 		image = Image.fromarray(frame)
 		
@@ -169,7 +171,7 @@ def processResults(image, results, labels, lastDetection, frametime, slackURL):
 	
 
 def foundNewDetection(label, image, slackURL):
-	logging.info ('NEW DETECTION ')
+	logging.info ('NEW DETECTION: ' + label)
 	send_message_to_slack("Detected new " + label, slackURL)
 	image.save("latest.png")
 	upload.upload("./client_id.json", ["latest.png"], "pyDetect")
@@ -191,8 +193,7 @@ def processFrame(frame, mask, interpreter, threshold):
 
 	start = time.time()
 	
-	logging.info("=============================")
-	logging.info("Processing Frame")
+	logging.info("==== Process Frame ====")
 	
 	results = []
 				
@@ -246,8 +247,8 @@ def make_interpreter(model_file):
 if __name__ == '__main__':
 
 	logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
+                                        handlers=[RotatingFileHandler('./pyDetect.log', maxBytes=1000000, backupCount=10)],
 					datefmt='%Y-%m-%d %H:%M:%S',
-					filename="info.log",
 					level=logging.INFO)
 	logging.info("starting")
 	main()
