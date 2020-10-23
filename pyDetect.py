@@ -2,6 +2,7 @@
 from imutils.video import VideoStream
 from PIL import Image
 from PIL import ImageDraw
+from logging.handlers import RotatingFileHandler
 import upload
 import argparse
 import imutils
@@ -74,14 +75,14 @@ def main():
 					  help='File path of .tflite file.')
 	parser.add_argument('-i', '--input', required=True,
 					  help='File path of image to process.')
-	parser.add_argument('-l', '--labels',
+	parser.add_argument('-l', '--labels', required=True,
 					  help='File path of labels file.')
 	parser.add_argument('-t', '--threshold',
 					  type=float, default=0.4,
 					  help='Score threshold for detected objects.')
-	parser.add_argument('-c', '--mask',
+	parser.add_argument('-c', '--mask', required=True,
 					  help='Mask to remove detections from areas')
-	parser.add_argument('-s', '--slack',
+	parser.add_argument('-s', '--slack', required=True,
 					  help='Slack notification URL')
 	parser.add_argument('-w', '--headless',
 					  type=str2bool, default=False,
@@ -117,6 +118,7 @@ def main():
 		# to have a maximum width of 500 pixels
 		frame,frametime = cap.read()
 		frame = imutils.resize(frame, width=500)
+		frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 				
 		image = Image.fromarray(frame)
 		
@@ -164,15 +166,15 @@ def processResults(image, results, labels, lastDetection, frametime, slackURL):
 		if obj.id <= 1:	
 			if obj.id in lastDetection:
 				if lastDetection[obj.id] + 15 <= frametime:
-					foundNewDetection(labels.get(obj.id, obj.id), image, slackURL)
+					foundNewDetection(labels.get(obj.id, obj.id), obj.score, image, slackURL)
 			lastDetection[obj.id] = frametime
 	
 
-def foundNewDetection(label, image, slackURL):
-	logging.info ('NEW DETECTION ')
-	send_message_to_slack("Detected new " + label, slackURL)
+def foundNewDetection(label, score, image, slackURL):
+	logging.info ('NEW DETECTION: ' + label)
+	send_message_to_slack("Detected new " + label + " " + str(score) , slackURL)
 	image.save("latest.png")
-	upload.upload("./client_id.json", ["latest.png"], "pyDetect")
+	#upload.upload("./client_id.json", ["latest.png"], "pyDetect")
 
 def send_message_to_slack(text, slackURL):
  
@@ -191,8 +193,7 @@ def processFrame(frame, mask, interpreter, threshold):
 
 	start = time.time()
 	
-	logging.info("=============================")
-	logging.info("Processing Frame")
+	logging.info("==== Process Frame ====")
 	
 	results = []
 				
@@ -246,8 +247,8 @@ def make_interpreter(model_file):
 if __name__ == '__main__':
 
 	logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
+                                        handlers=[RotatingFileHandler('./pyDetect.log', maxBytes=10000000, backupCount=5)],
 					datefmt='%Y-%m-%d %H:%M:%S',
-					filename="info.log",
 					level=logging.INFO)
 	logging.info("starting")
 	main()

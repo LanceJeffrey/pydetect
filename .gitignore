@@ -7,12 +7,17 @@
 
 # google client id
 client_id.json
+*.log.*
+*.log
+latest.png
 
 # test files
 test*.mp4
 
 ### Linux ###
 *~
+*.swo
+*.swp
 
 # temporary files which can be created if a process still has a handle open of a deleted file
 .fuse_hidden*
@@ -158,3 +163,4 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.gitignore.io/api/linux,python,windows
+nohup.out
